@@ -3,15 +3,7 @@
 
 @import "tailwindcss";
 
-/*
-  Matcha Mint — this is not a Google Font. If you own the font file(s),
-  drop them in /public/fonts and point src at them below.
-  Vite serves everything in /public from the site root, so
-  /public/fonts/MatchaMint.woff2 becomes url("/fonts/MatchaMint.woff2").
-
-  Don't have the file yet? Comment this block out — the app falls back
-  to the generic 'cursive' family until you add it.
-*/
+/* Matcha Mint — local files in /public/fonts/matcha_mint/ */
 @font-face {
   font-family: "Matcha Mint";
   src: url("/fonts/matcha_mint/Matcha Mint.otf") format("opentype"),

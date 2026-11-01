@@ -1,31 +1,15 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { login, signup, verifyEmail } from "../api/auth";
 import { extractErrorMessage } from "../api/client";
+import { saveUser } from "../session";
 
 /*
-  Crumb — Login / Sign up
-  ------------------------
-  Fonts required (not bundled here — add to your project):
-    - "Matcha Mint"  → used for the "Crumb" wordmark only
-    - "Comfortaa"    → used for everything else (Google Font, easy to pull in)
-
-  If you're using this outside a build step that already loads fonts,
-  drop this in your index.html <head>:
-
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;500;700&display=swap" rel="stylesheet">
-
-  "Matcha Mint" isn't a Google Font — if it's a font file you own, @font-face
-  it in your global CSS:
-
-    @font-face {
-      font-family: "Matcha Mint";
-      src: url("/fonts/MatchaMint.woff2") format("woff2");
-    }
-
-  Field names below match your pydantic schemas exactly:
-    LoginSchema      -> email, password
-    UserSignUp       -> email, password, username, dob
+  Crumb — Login / Sign up / Verify email
+  Field names match the pydantic schemas:
+    LoginSchema       -> email, password
+    UserSignUp        -> email, password, username, dob
+    VerifyEmailSchema -> verification_code + the full signup payload
 */
 
 const COLORS = {
@@ -71,7 +55,7 @@ function validateLogin({ email, password }) {
 
 function validateCode(code) {
   const errors = {};
-  if (!code || code.trim().length !== 6 || !/^\d{6}$/.test(code.trim())) {
+  if (!code || !/^\d{6}$/.test(code.trim())) {
     errors.code = "enter the 6-digit code from your email";
   }
   return errors;
@@ -100,7 +84,6 @@ const inputBase =
   "focus:translate-x-[-2px] focus:translate-y-[-2px]";
 
 function inputStyle(hasError) {
-  const shadowColor = hasError ? "#7a2b1f" : COLORS.heading;
   return {
     borderColor: hasError ? "#7a2b1f" : COLORS.heading,
     color: COLORS.heading,
@@ -115,7 +98,34 @@ function inputClass(hasError) {
   return `${inputBase} ${shadow}`;
 }
 
+const buttonClass =
+  "w-full py-3 font-bold border-2 rounded-none shadow-none transition-all duration-100 " +
+  "hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[4px_4px_0_#0c0a08] " +
+  "active:translate-x-0 active:translate-y-0 active:shadow-none " +
+  "disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:translate-x-0 " +
+  "disabled:hover:translate-y-0 disabled:hover:shadow-none";
+
+const buttonStyle = {
+  backgroundColor: COLORS.button,
+  color: COLORS.buttonText,
+  borderColor: COLORS.heading,
+};
+
+function ApiError({ message }) {
+  if (!message) return null;
+  return (
+    <p
+      className="text-sm font-bold mb-4 border-2 px-3 py-2"
+      style={{ color: "#7a2b1f", borderColor: "#7a2b1f" }}
+    >
+      {message}
+    </p>
+  );
+}
+
 export default function CrumbAuth() {
+  const navigate = useNavigate();
+
   const [mode, setMode] = useState("login"); // "login" | "signup" | "verify"
   const [form, setForm] = useState({
     email: "",
@@ -125,7 +135,7 @@ export default function CrumbAuth() {
   });
   const [code, setCode] = useState("");
   const [errors, setErrors] = useState({});
-  const [submitted, setSubmitted] = useState(false);
+  const [verified, setVerified] = useState(false);
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState("");
   const [resending, setResending] = useState(false);
@@ -137,9 +147,15 @@ export default function CrumbAuth() {
   const switchMode = (next) => {
     setMode(next);
     setErrors({});
-    setSubmitted(false);
+    setVerified(false);
     setApiError("");
     setResendMessage("");
+  };
+
+  const goToLogin = () => {
+    // keep the email so they don't retype it, but drop the password
+    setForm((f) => ({ ...f, password: "" }));
+    switchMode("login");
   };
 
   const handleSubmit = async (e) => {
@@ -147,6 +163,7 @@ export default function CrumbAuth() {
     setApiError("");
     setResendMessage("");
 
+    // ---- verify email ----
     if (mode === "verify") {
       const validationErrors = validateCode(code);
       setErrors(validationErrors);
@@ -161,7 +178,7 @@ export default function CrumbAuth() {
           username: form.username,
           dob: form.dob,
         });
-        setSubmitted(true);
+        setVerified(true);
       } catch (err) {
         setApiError(extractErrorMessage(err));
       } finally {
@@ -170,6 +187,7 @@ export default function CrumbAuth() {
       return;
     }
 
+    // ---- login / signup ----
     const validationErrors =
       mode === "signup" ? validateSignup(form) : validateLogin(form);
     setErrors(validationErrors);
@@ -178,8 +196,13 @@ export default function CrumbAuth() {
     setLoading(true);
     try {
       if (mode === "login") {
-        await login({ email: form.email, password: form.password });
-        setSubmitted(true);
+        const res = await login({ email: form.email, password: form.password });
+
+        // Accepts either { user_id, username } / { data: { ... } } or a bare user_id.
+        const body = res.data?.data ?? res.data;
+        const user = body && typeof body === "object" ? body : { user_id: body };
+        saveUser({ ...user, email: form.email });
+        navigate("/home");
       } else {
         await signup({
           email: form.email,
@@ -187,8 +210,7 @@ export default function CrumbAuth() {
           username: form.username,
           dob: form.dob,
         });
-        // Account isn't created yet — backend only sent a code.
-        // Move to the verify screen, keep the form data for later.
+        // Account isn't created yet — the backend only sent a code.
         setErrors({});
         setCode("");
         setMode("verify");
@@ -237,10 +259,7 @@ export default function CrumbAuth() {
           >
             Crumb
           </h1>
-          <p
-            className="text-sm font-medium"
-            style={{ color: COLORS.heading, opacity: 0.75 }}
-          >
+          <p className="text-sm font-medium" style={{ color: COLORS.heading, opacity: 0.75 }}>
             your gluten-free buddy app
           </p>
         </div>
@@ -250,18 +269,14 @@ export default function CrumbAuth() {
           className="bg-white border-2 p-8 shadow-none hover:shadow-[8px_8px_0_#0c0a08] transition-shadow duration-150"
           style={{ borderColor: COLORS.heading }}
         >
-          {submitted ? (
-            <div className="text-center py-6">
-              <p className="font-bold text-lg" style={{ color: COLORS.heading }}>
-                {mode === "login"
-                  ? "Logged in."
-                  : mode === "verify"
-                  ? "Account created."
-                  : "Account created."}
+          {verified ? (
+            <div className="text-center py-4">
+              <p className="font-bold text-lg mb-6" style={{ color: COLORS.heading }}>
+                Account created.
               </p>
-              <p className="text-sm mt-2" style={{ color: COLORS.heading, opacity: 0.7 }}>
-                (Wire this up to whatever comes next — dashboard redirect, etc.)
-              </p>
+              <button type="button" onClick={goToLogin} className={buttonClass} style={buttonStyle}>
+                Go to login
+              </button>
             </div>
           ) : mode === "verify" ? (
             <form onSubmit={handleSubmit} noValidate>
@@ -290,25 +305,9 @@ export default function CrumbAuth() {
                 </p>
               )}
 
-              {apiError && (
-                <p
-                  className="text-sm font-bold mb-4 border-2 px-3 py-2"
-                  style={{ color: "#7a2b1f", borderColor: "#7a2b1f" }}
-                >
-                  {apiError}
-                </p>
-              )}
+              <ApiError message={apiError} />
 
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 font-bold border-2 rounded-none shadow-none transition-all duration-100 hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[4px_4px_0_#0c0a08] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-none"
-                style={{
-                  backgroundColor: COLORS.button,
-                  color: COLORS.buttonText,
-                  borderColor: COLORS.heading,
-                }}
-              >
+              <button type="submit" disabled={loading} className={buttonClass} style={buttonStyle}>
                 {loading ? "Verifying…" : "Verify email"}
               </button>
 
@@ -395,25 +394,9 @@ export default function CrumbAuth() {
                 </div>
               )}
 
-              {apiError && (
-                <p
-                  className="text-sm font-bold mb-4 border-2 px-3 py-2"
-                  style={{ color: "#7a2b1f", borderColor: "#7a2b1f" }}
-                >
-                  {apiError}
-                </p>
-              )}
+              <ApiError message={apiError} />
 
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 font-bold border-2 rounded-none shadow-none transition-all duration-100 hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[4px_4px_0_#0c0a08] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-none"
-                style={{
-                  backgroundColor: COLORS.button,
-                  color: COLORS.buttonText,
-                  borderColor: COLORS.heading,
-                }}
-              >
+              <button type="submit" disabled={loading} className={buttonClass} style={buttonStyle}>
                 {loading
                   ? mode === "login"
                     ? "Logging in…"
@@ -425,7 +408,7 @@ export default function CrumbAuth() {
             </form>
           )}
 
-          {!submitted && mode !== "verify" && (
+          {!verified && mode !== "verify" && (
             <p className="text-center text-sm mt-6" style={{ color: COLORS.heading }}>
               {mode === "login" ? (
                 <>
